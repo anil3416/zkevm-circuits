@@ -13,6 +13,7 @@ use crate::{
     },
     util::Expr,
 };
+use bus_mapping::evm::OpcodeId;
 use eth_types::Field;
 use halo2_proofs::{circuit::Region, plonk::Error};
 use std::convert::TryFrom;
@@ -45,9 +46,10 @@ impl<F: Field> ExecutionGadget<F> for TimestampGadget<F> {
             rw_counter: Delta(1.expr()),
             program_counter: Delta(1.expr()),
             stack_pointer: Delta((-1).expr()),
+            gas_left: Delta(-OpcodeId::TIMESTAMP.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -82,17 +84,21 @@ impl<F: Field> ExecutionGadget<F> for TimestampGadget<F> {
 mod test {
     use crate::test_util::run_test_circuits;
     use eth_types::bytecode;
+    use mock::TestContext;
 
-    fn test_ok() {
+    #[test]
+    fn timestamp_gadget_test() {
         let bytecode = bytecode! {
-            #[start]
             TIMESTAMP
             STOP
         };
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
-    }
-    #[test]
-    fn timestamp_gadget_test() {
-        test_ok();
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 }

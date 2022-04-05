@@ -23,7 +23,7 @@ use halo2_proofs::{circuit::Region, plonk::Error};
 #[derive(Clone, Debug)]
 pub(crate) struct AddGadget<F> {
     same_context: SameContextGadget<F>,
-    add_words: AddWordsGadget<F, 2>,
+    add_words: AddWordsGadget<F, 2, false>,
     is_sub: PairSelectGadget<F>,
 }
 
@@ -37,8 +37,8 @@ impl<F: Field> ExecutionGadget<F> for AddGadget<F> {
 
         let a = cb.query_word();
         let b = cb.query_word();
-        let add_words = AddWordsGadget::construct(cb, [a.clone(), b.clone()]);
-        let c = add_words.sum();
+        let c = cb.query_word();
+        let add_words = AddWordsGadget::construct(cb, [a.clone(), b.clone()], c.clone());
 
         // Swap a and c if opcode is SUB
         let is_sub = PairSelectGadget::construct(
@@ -59,9 +59,10 @@ impl<F: Field> ExecutionGadget<F> for AddGadget<F> {
             rw_counter: Delta(3.expr()),
             program_counter: Delta(1.expr()),
             stack_pointer: Delta(1.expr()),
-            ..Default::default()
+            gas_left: Delta(-OpcodeId::ADD.constant_gas_cost().expr()),
+            ..StepStateTransition::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -107,16 +108,23 @@ mod test {
     use crate::test_util::run_test_circuits;
     use eth_types::evm_types::OpcodeId;
     use eth_types::{bytecode, Word};
+    use mock::TestContext;
 
     fn test_ok(opcode: OpcodeId, a: Word, b: Word) {
         let bytecode = bytecode! {
             PUSH32(a)
             PUSH32(b)
-            #[start]
             .write_op(opcode)
             STOP
         };
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 
     #[test]

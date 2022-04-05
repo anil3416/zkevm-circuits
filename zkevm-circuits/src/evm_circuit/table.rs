@@ -23,10 +23,13 @@ impl<F: FieldExt, const W: usize> LookupTable<F, W> for [Column<Fixed>; W] {
 
 #[derive(Clone, Copy, Debug)]
 pub enum FixedTableTag {
-    Range16 = 1,
+    Range5 = 1,
+    Range16,
     Range32,
+    Range64,
     Range256,
     Range512,
+    Range1024,
     SignByte,
     BitwiseAnd,
     BitwiseOr,
@@ -37,10 +40,13 @@ pub enum FixedTableTag {
 impl FixedTableTag {
     pub fn iterator() -> impl Iterator<Item = Self> {
         [
+            Self::Range5,
             Self::Range16,
             Self::Range32,
+            Self::Range64,
             Self::Range256,
             Self::Range512,
+            Self::Range1024,
             Self::SignByte,
             Self::BitwiseAnd,
             Self::BitwiseOr,
@@ -54,17 +60,26 @@ impl FixedTableTag {
     pub fn build<F: FieldExt>(&self) -> Box<dyn Iterator<Item = [F; 4]>> {
         let tag = F::from(*self as u64);
         match self {
+            Self::Range5 => {
+                Box::new((0..5).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
+            }
             Self::Range16 => {
                 Box::new((0..16).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
             }
             Self::Range32 => {
                 Box::new((0..32).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
             }
+            Self::Range64 => {
+                Box::new((0..64).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
+            }
             Self::Range256 => {
                 Box::new((0..256).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
             }
             Self::Range512 => {
                 Box::new((0..512).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
+            }
+            Self::Range1024 => {
+                Box::new((0..1024).map(move |value| [tag, F::from(value), F::zero(), F::zero()]))
             }
             Self::SignByte => Box::new((0..256).map(move |value| {
                 [

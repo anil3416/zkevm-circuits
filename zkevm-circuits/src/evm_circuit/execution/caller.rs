@@ -13,8 +13,8 @@ use crate::{
     },
     util::Expr,
 };
-use eth_types::Field;
-use eth_types::ToLittleEndian;
+use bus_mapping::evm::OpcodeId;
+use eth_types::{Field, ToLittleEndian};
 use halo2_proofs::{circuit::Region, plonk::Error};
 use std::convert::TryInto;
 
@@ -22,7 +22,7 @@ use std::convert::TryInto;
 pub(crate) struct CallerGadget<F> {
     same_context: SameContextGadget<F>,
     // Using RLC to match against rw_table->stack_op value
-    caller_address: RandomLinearCombination<F, 20>,
+    caller_address: RandomLinearCombination<F, N_BYTES_ACCOUNT_ADDRESS>,
 }
 
 impl<F: Field> ExecutionGadget<F> for CallerGadget<F> {
@@ -31,7 +31,7 @@ impl<F: Field> ExecutionGadget<F> for CallerGadget<F> {
     const EXECUTION_STATE: ExecutionState = ExecutionState::CALLER;
 
     fn configure(cb: &mut ConstraintBuilder<F>) -> Self {
-        let caller_address = cb.query_rlc::<N_BYTES_ACCOUNT_ADDRESS>();
+        let caller_address = cb.query_rlc();
 
         // Lookup rw_table -> call_context with caller address
         cb.call_context_lookup(
@@ -50,9 +50,10 @@ impl<F: Field> ExecutionGadget<F> for CallerGadget<F> {
             rw_counter: Delta(2.expr()),
             program_counter: Delta(1.expr()),
             stack_pointer: Delta((-1).expr()),
+            gas_left: Delta(-OpcodeId::CALLER.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -91,17 +92,21 @@ impl<F: Field> ExecutionGadget<F> for CallerGadget<F> {
 mod test {
     use crate::test_util::run_test_circuits;
     use eth_types::bytecode;
+    use mock::TestContext;
 
-    fn test_ok() {
+    #[test]
+    fn caller_gadget_test() {
         let bytecode = bytecode! {
-            #[start]
             CALLER
             STOP
         };
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
-    }
-    #[test]
-    fn caller_gadget_test() {
-        test_ok();
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 }

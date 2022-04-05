@@ -1,13 +1,13 @@
 use crate::{
     evm_circuit::{
         execution::ExecutionGadget,
-        param::{N_BYTES_GAS, STACK_CAPACITY},
+        param::N_BYTES_GAS,
         step::ExecutionState,
         table::{AccountFieldTag, CallContextFieldTag, TxContextFieldTag},
         util::{
             common_gadget::TransferWithGasFeeGadget,
             constraint_builder::{
-                ConstraintBuilder, StepStateTransition,
+                ConstraintBuilder, ReversionInfo, StepStateTransition,
                 Transition::{Delta, To},
             },
             math_gadget::{MulWordByU64Gadget, RangeCheckGadget},
@@ -17,9 +17,7 @@ use crate::{
     },
     util::Expr,
 };
-use eth_types::evm_types::GasCost;
-use eth_types::Field;
-use eth_types::{ToLittleEndian, ToScalar};
+use eth_types::{evm_types::GasCost, Field, ToLittleEndian, ToScalar};
 use halo2_proofs::{circuit::Region, plonk::Error};
 
 #[derive(Clone, Debug)]
@@ -35,8 +33,7 @@ pub(crate) struct BeginTxGadget<F> {
     tx_value: Word<F>,
     tx_call_data_length: Cell<F>,
     tx_call_data_gas_cost: Cell<F>,
-    rw_counter_end_of_reversion: Cell<F>,
-    is_persistent: Cell<F>,
+    reversion_info: ReversionInfo<F>,
     sufficient_gas_left: RangeCheckGadget<F, N_BYTES_GAS>,
     transfer_with_gas_fee: TransferWithGasFeeGadget<F>,
     code_hash: Cell<F>,
@@ -51,12 +48,8 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         // Use rw_counter of the step which triggers next call as its call_id.
         let call_id = cb.curr.state.rw_counter.clone();
 
-        let [tx_id, rw_counter_end_of_reversion, is_persistent] = [
-            CallContextFieldTag::TxId,
-            CallContextFieldTag::RwCounterEndOfReversion,
-            CallContextFieldTag::IsPersistent,
-        ]
-        .map(|field_tag| cb.call_context(Some(call_id.expr()), field_tag));
+        let tx_id = cb.call_context(Some(call_id.expr()), CallContextFieldTag::TxId);
+        let mut reversion_info = cb.reversion_info(None);
 
         let [tx_nonce, tx_gas, tx_caller_address, tx_callee_address, tx_is_create, tx_call_data_length, tx_call_data_gas_cost] =
             [
@@ -86,13 +79,14 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             AccountFieldTag::Nonce,
             tx_nonce.expr() + 1.expr(),
             tx_nonce.expr(),
+            None,
         );
 
         // TODO: Implement EIP 1559 (currently it only supports legacy
         // transaction format)
         // Calculate transaction gas fee
         let mul_gas_fee_by_gas =
-            MulWordByU64Gadget::construct(cb, tx_gas_price.clone(), tx_gas.clone(), true);
+            MulWordByU64Gadget::construct(cb, tx_gas_price.clone(), tx_gas.expr());
 
         // TODO: Take gas cost of access list (EIP 2930) into consideration.
         // Use intrinsic gas
@@ -107,8 +101,20 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         let sufficient_gas_left = RangeCheckGadget::construct(cb, gas_left.clone());
 
         // Prepare access list of caller and callee
-        cb.account_access_list_write(tx_id.expr(), tx_caller_address.expr(), 1.expr(), 0.expr());
-        cb.account_access_list_write(tx_id.expr(), tx_callee_address.expr(), 1.expr(), 0.expr());
+        cb.account_access_list_write(
+            tx_id.expr(),
+            tx_caller_address.expr(),
+            1.expr(),
+            0.expr(),
+            None,
+        );
+        cb.account_access_list_write(
+            tx_id.expr(),
+            tx_callee_address.expr(),
+            1.expr(),
+            0.expr(),
+            None,
+        );
 
         // Transfer value from caller to callee
         let transfer_with_gas_fee = TransferWithGasFeeGadget::construct(
@@ -117,8 +123,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             tx_callee_address.expr(),
             tx_value.clone(),
             mul_gas_fee_by_gas.product().clone(),
-            is_persistent.expr(),
-            rw_counter_end_of_reversion.expr(),
+            &mut reversion_info,
         );
 
         // TODO: Handle creation transaction
@@ -147,6 +152,9 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             (CallContextFieldTag::LastCalleeId, 0.expr()),
             (CallContextFieldTag::LastCalleeReturnDataOffset, 0.expr()),
             (CallContextFieldTag::LastCalleeReturnDataLength, 0.expr()),
+            (CallContextFieldTag::IsRoot, 1.expr()),
+            (CallContextFieldTag::IsCreate, 0.expr()),
+            (CallContextFieldTag::CodeSource, code_hash.expr()),
         ] {
             cb.call_context_lookup(false.expr(), Some(call_id.expr()), field_tag, value);
         }
@@ -172,13 +180,11 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             //   - Read CallContext LastCalleeId
             //   - Read CallContext LastCalleeReturnDataOffset
             //   - Read CallContext LastCalleeReturnDataLength
-            rw_counter: Delta(19.expr()),
+            rw_counter: Delta(22.expr()),
             call_id: To(call_id.expr()),
             is_root: To(true.expr()),
             is_create: To(false.expr()),
             code_source: To(code_hash.expr()),
-            program_counter: To(0.expr()),
-            stack_pointer: To(STACK_CAPACITY.expr()),
             gas_left: To(gas_left),
             state_write_counter: To(2.expr()),
             ..StepStateTransition::new_context()
@@ -196,8 +202,7 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
             tx_value,
             tx_call_data_length,
             tx_call_data_gas_cost,
-            rw_counter_end_of_reversion,
-            is_persistent,
+            reversion_info,
             sufficient_gas_left,
             transfer_with_gas_fee,
             code_hash,
@@ -240,13 +245,12 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
         )?;
         self.tx_call_data_gas_cost
             .assign(region, offset, Some(F::from(tx.call_data_gas_cost)))?;
-        self.rw_counter_end_of_reversion.assign(
+        self.reversion_info.assign(
             region,
             offset,
-            Some(F::from(call.rw_counter_end_of_reversion as u64)),
+            call.rw_counter_end_of_reversion,
+            call.is_persistent,
         )?;
-        self.is_persistent
-            .assign(region, offset, Some(F::from(call.is_persistent as u64)))?;
         self.sufficient_gas_left
             .assign(region, offset, F::from(tx.gas - step.gas_cost))?;
         self.transfer_with_gas_fee.assign(
@@ -272,297 +276,61 @@ impl<F: Field> ExecutionGadget<F> for BeginTxGadget<F> {
 #[cfg(test)]
 mod test {
     use crate::evm_circuit::{
-        param::STACK_CAPACITY,
-        step::ExecutionState,
-        table::{AccountFieldTag, CallContextFieldTag, RwTableTag},
-        test::{rand_bytes, rand_fp, rand_range, run_test_circuit_incomplete_fixed_table},
-        witness::{Block, Bytecode, Call, CodeSource, ExecStep, Rw, RwMap, Transaction},
+        test::{rand_bytes, rand_range, run_test_circuit_incomplete_fixed_table},
+        witness::block_convert,
     };
-    use eth_types::{
-        self, address,
-        evm_types::{GasCost, OpcodeId},
-        Address, ToWord, Word,
-    };
-    use std::convert::TryInto;
+    use bus_mapping::{evm::OpcodeId, mock::BlockData};
+    use eth_types::{self, address, bytecode, evm_types::GasCost, geth_types::GethData, Word};
+    use mock::TestContext;
 
     fn test_ok(tx: eth_types::Transaction, is_success: bool) {
-        let rw_counter_end_of_reversion = if is_success { 0 } else { 23 };
-
-        let gas_fee = tx.gas * tx.gas_price.unwrap_or_else(Word::zero);
-        let call_data_gas_cost = tx
-            .input
-            .0
-            .iter()
-            .fold(0, |acc, byte| acc + if *byte == 0 { 4 } else { 16 });
-        let intrinsic_gas_cost = if tx.to.is_none() {
-            GasCost::CREATION_TX.as_u64()
+        let code = if is_success {
+            bytecode! {
+                PUSH1(0)
+                PUSH1(0)
+                RETURN
+            }
         } else {
-            GasCost::TX.as_u64()
-        } + call_data_gas_cost;
-
-        let from_balance_prev = Word::from(10_i32).pow(20_i32.into());
-        let to_balance_prev = Word::zero();
-        let from_balance = from_balance_prev - tx.value - gas_fee;
-        let to_balance = to_balance_prev + tx.value;
-
-        let randomness = rand_fp();
-        let bytecode = Bytecode::new(vec![OpcodeId::STOP.as_u8()]);
-        let block = Block {
-            randomness,
-            txs: vec![Transaction {
-                id: 1,
-                nonce: tx.nonce.try_into().unwrap(),
-                gas: tx.gas.try_into().unwrap(),
-                gas_price: tx.gas_price.unwrap_or_else(Word::zero),
-                caller_address: tx.from,
-                callee_address: tx.to.unwrap_or_else(Address::zero),
-                is_create: tx.to.is_none(),
-                value: tx.value,
-                call_data: tx.input.to_vec(),
-                call_data_length: tx.input.0.len(),
-                call_data_gas_cost,
-                calls: vec![Call {
-                    id: 1,
-                    is_root: true,
-                    is_create: false,
-                    code_source: CodeSource::Account(bytecode.hash),
-                    rw_counter_end_of_reversion,
-                    is_persistent: is_success,
-                    is_success,
-                    ..Default::default()
-                }],
-                steps: vec![
-                    ExecStep {
-                        rw_indices: [
-                            vec![
-                                (RwTableTag::CallContext, 0),
-                                (RwTableTag::CallContext, 1),
-                                (RwTableTag::CallContext, 2),
-                                (RwTableTag::Account, 0),
-                                (RwTableTag::TxAccessListAccount, 0),
-                                (RwTableTag::TxAccessListAccount, 1),
-                                (RwTableTag::Account, 1),
-                                (RwTableTag::Account, 2),
-                                (RwTableTag::Account, 3),
-                                (RwTableTag::CallContext, 3),
-                                (RwTableTag::CallContext, 4),
-                                (RwTableTag::CallContext, 5),
-                                (RwTableTag::CallContext, 6),
-                                (RwTableTag::CallContext, 7),
-                                (RwTableTag::CallContext, 8),
-                                (RwTableTag::CallContext, 9),
-                            ],
-                            if is_success {
-                                vec![]
-                            } else {
-                                vec![(RwTableTag::Account, 4), (RwTableTag::Account, 5)]
-                            },
-                        ]
-                        .concat(),
-                        execution_state: ExecutionState::BeginTx,
-                        rw_counter: 1,
-                        gas_cost: intrinsic_gas_cost,
-                        ..Default::default()
-                    },
-                    ExecStep {
-                        execution_state: ExecutionState::STOP,
-                        rw_counter: 20,
-                        program_counter: 0,
-                        stack_pointer: STACK_CAPACITY,
-                        gas_left: 0,
-                        opcode: Some(OpcodeId::STOP),
-                        state_write_counter: 2,
-                        ..Default::default()
-                    },
-                ],
-            }],
-            rws: RwMap(
-                [
-                    (
-                        RwTableTag::TxAccessListAccount,
-                        vec![
-                            Rw::TxAccessListAccount {
-                                rw_counter: 5,
-                                is_write: true,
-                                tx_id: 1,
-                                account_address: tx.from,
-                                value: true,
-                                value_prev: false,
-                            },
-                            Rw::TxAccessListAccount {
-                                rw_counter: 6,
-                                is_write: true,
-                                tx_id: 1,
-                                account_address: tx.to.unwrap(),
-                                value: true,
-                                value_prev: false,
-                            },
-                        ],
-                    ),
-                    (
-                        RwTableTag::Account,
-                        [
-                            vec![
-                                Rw::Account {
-                                    rw_counter: 4,
-                                    is_write: true,
-                                    account_address: tx.from,
-                                    field_tag: AccountFieldTag::Nonce,
-                                    value: tx.nonce + Word::one(),
-                                    value_prev: tx.nonce,
-                                },
-                                Rw::Account {
-                                    rw_counter: 7,
-                                    is_write: true,
-                                    account_address: tx.from,
-                                    field_tag: AccountFieldTag::Balance,
-                                    value: from_balance,
-                                    value_prev: from_balance_prev,
-                                },
-                                Rw::Account {
-                                    rw_counter: 8,
-                                    is_write: true,
-                                    account_address: tx.to.unwrap_or_else(Address::zero),
-                                    field_tag: AccountFieldTag::Balance,
-                                    value: to_balance,
-                                    value_prev: to_balance_prev,
-                                },
-                                Rw::Account {
-                                    rw_counter: 9,
-                                    is_write: false,
-                                    account_address: tx.to.unwrap_or_else(Address::zero),
-                                    field_tag: AccountFieldTag::CodeHash,
-                                    value: bytecode.hash,
-                                    value_prev: bytecode.hash,
-                                },
-                            ],
-                            if is_success {
-                                vec![]
-                            } else {
-                                vec![
-                                    Rw::Account {
-                                        rw_counter: rw_counter_end_of_reversion - 1,
-                                        is_write: true,
-                                        account_address: tx.to.unwrap_or_else(Address::zero),
-                                        field_tag: AccountFieldTag::Balance,
-                                        value: to_balance_prev,
-                                        value_prev: to_balance,
-                                    },
-                                    Rw::Account {
-                                        rw_counter: rw_counter_end_of_reversion,
-                                        is_write: true,
-                                        account_address: tx.from,
-                                        field_tag: AccountFieldTag::Balance,
-                                        value: from_balance_prev,
-                                        value_prev: from_balance,
-                                    },
-                                ]
-                            },
-                        ]
-                        .concat(),
-                    ),
-                    (
-                        RwTableTag::CallContext,
-                        vec![
-                            Rw::CallContext {
-                                rw_counter: 1,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::TxId,
-                                value: Word::one(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 2,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::RwCounterEndOfReversion,
-                                value: Word::from(rw_counter_end_of_reversion),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 3,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::IsPersistent,
-                                value: Word::from(is_success as u64),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 10,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::Depth,
-                                value: Word::one(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 11,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::CallerAddress,
-                                value: tx.from.to_word(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 12,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::CalleeAddress,
-                                value: tx.to.unwrap_or_else(Address::zero).to_word(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 13,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::CallDataOffset,
-                                value: Word::zero(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 14,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::CallDataLength,
-                                value: tx.input.0.len().into(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 15,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::Value,
-                                value: tx.value,
-                            },
-                            Rw::CallContext {
-                                rw_counter: 16,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::IsStatic,
-                                value: Word::zero(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 17,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::LastCalleeId,
-                                value: Word::zero(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 18,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::LastCalleeReturnDataOffset,
-                                value: Word::zero(),
-                            },
-                            Rw::CallContext {
-                                rw_counter: 19,
-                                is_write: false,
-                                call_id: 1,
-                                field_tag: CallContextFieldTag::LastCalleeReturnDataLength,
-                                value: Word::zero(),
-                            },
-                        ],
-                    ),
-                ]
-                .into(),
-            ),
-            bytecodes: vec![bytecode],
-            ..Default::default()
+            bytecode! {
+                PUSH1(0)
+                PUSH1(0)
+                REVERT
+            }
         };
+
+        let from = tx.from;
+        let to = tx.to.unwrap_or_default();
+
+        // Get the execution steps from the external tracer
+        let block: GethData = TestContext::<2, 1>::new(
+            None,
+            |accs| {
+                accs[0]
+                    .address(to)
+                    .balance(Word::from(10u64.pow(10)))
+                    .code(code);
+                accs[1].address(from).balance(Word::from(10u64.pow(19)));
+            },
+            |mut txs, _accs| {
+                txs[0]
+                    .to(tx.to.unwrap())
+                    .from(tx.from)
+                    .gas_price(tx.gas_price.unwrap())
+                    .gas(tx.gas)
+                    .input(tx.input)
+                    .value(tx.value);
+            },
+            |block, _tx| block.number(0xcafeu64),
+        )
+        .unwrap()
+        .into();
+
+        let mut builder = BlockData::new_from_geth_data(block.clone()).new_circuit_input_builder();
+
+        builder
+            .handle_block(&block.eth_block, &block.geth_traces)
+            .unwrap();
+        let block = block_convert(&builder.block, &builder.code_db);
         assert_eq!(run_test_circuit_incomplete_fixed_table(block), Ok(()));
     }
 
@@ -574,13 +342,14 @@ mod test {
     ) -> eth_types::Transaction {
         let from = address!("0x00000000000000000000000000000000000000fe");
         let to = address!("0x00000000000000000000000000000000000000ff");
-        let minimal_gas = Word::from(GasCost::TX.as_u64());
-        let one_ether = Word::from(10).pow(18.into());
+        let minimal_gas =
+            Word::from(GasCost::TX.as_u64() + 2 * OpcodeId::PUSH32.constant_gas_cost().as_u64());
+        let point_one_ether = Word::from(10u64.pow(17));
         let two_gwei = Word::from(2_000_000_000);
         eth_types::Transaction {
             from,
             to: Some(to),
-            value: value.unwrap_or(one_ether),
+            value: value.unwrap_or(point_one_ether),
             gas: gas.map(Word::from).unwrap_or(minimal_gas),
             gas_price: gas_price.or(Some(two_gwei)),
             input: calldata.into(),
@@ -598,19 +367,19 @@ mod test {
 
         // Transfer nothing with some calldata
         test_ok(
-            mock_tx(None, Some(21080), None, vec![1, 2, 3, 4, 0, 0, 0, 0]),
+            mock_tx(None, Some(21086), None, vec![1, 2, 3, 4, 0, 0, 0, 0]),
             false,
         );
     }
 
     #[test]
     fn begin_tx_gadget_rand() {
-        let one_hundred_ether = Word::from(10u8).pow(Word::from(20u8));
+        let point_one_ether = Word::from(10u8).pow(Word::from(17u8));
 
         // Transfer random ether, successfully
         test_ok(
             mock_tx(
-                Some(Word::from_little_endian(&rand_bytes(32)) % one_hundred_ether),
+                Some(Word::from_little_endian(&rand_bytes(32)) % point_one_ether),
                 None,
                 None,
                 vec![],
@@ -623,7 +392,7 @@ mod test {
             mock_tx(
                 None,
                 None,
-                Some(Word::from(rand_range(0..42857142857143u64))),
+                Some(Word::from(rand_range(0..47619047619047u64))),
                 vec![],
             ),
             true,
@@ -632,7 +401,7 @@ mod test {
         // Transfer random ether, tx reverts
         test_ok(
             mock_tx(
-                Some(Word::from_little_endian(&rand_bytes(32)) % one_hundred_ether),
+                Some(Word::from_little_endian(&rand_bytes(32)) % point_one_ether),
                 None,
                 None,
                 vec![],
@@ -645,7 +414,7 @@ mod test {
             mock_tx(
                 None,
                 None,
-                Some(Word::from(rand_range(0..42857142857143u64))),
+                Some(Word::from(rand_range(0..476190476190476u64))),
                 vec![],
             ),
             false,

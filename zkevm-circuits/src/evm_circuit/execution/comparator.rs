@@ -87,9 +87,10 @@ impl<F: Field> ExecutionGadget<F> for ComparatorGadget<F> {
             rw_counter: Delta(3.expr()),
             program_counter: Delta(1.expr()),
             stack_pointer: Delta(1.expr()),
+            gas_left: Delta(-OpcodeId::LT.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -170,16 +171,23 @@ mod test {
     use crate::{evm_circuit::test::rand_word, test_util::run_test_circuits};
     use eth_types::evm_types::OpcodeId;
     use eth_types::{bytecode, Word};
+    use mock::TestContext;
 
     fn test_ok(opcode: OpcodeId, a: Word, b: Word, _c: Word) {
         let bytecode = bytecode! {
             PUSH32(b)
             PUSH32(a)
-            #[start]
             .write_op(opcode)
             STOP
         };
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 
     #[test]

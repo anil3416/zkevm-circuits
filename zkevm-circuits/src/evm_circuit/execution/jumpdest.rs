@@ -10,6 +10,7 @@ use crate::{
     },
     util::Expr,
 };
+use bus_mapping::evm::OpcodeId;
 use eth_types::Field;
 use halo2_proofs::{circuit::Region, plonk::Error};
 
@@ -27,10 +28,11 @@ impl<F: Field> ExecutionGadget<F> for JumpdestGadget<F> {
         // State transition
         let step_state_transition = StepStateTransition {
             program_counter: Delta(1.expr()),
+            gas_left: Delta(-OpcodeId::JUMPDEST.constant_gas_cost().expr()),
             ..Default::default()
         };
         let opcode = cb.query_cell();
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self { same_context }
     }
@@ -52,19 +54,21 @@ impl<F: Field> ExecutionGadget<F> for JumpdestGadget<F> {
 mod test {
     use crate::test_util::run_test_circuits;
     use eth_types::bytecode;
+    use mock::TestContext;
 
-    fn test_ok() {
+    #[test]
+    fn jumpdest_gadget_simple() {
         let bytecode = bytecode! {
-            #[start]
             JUMPDEST
             STOP
         };
 
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
-    }
-
-    #[test]
-    fn jumpdest_gadget_simple() {
-        test_ok();
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 }

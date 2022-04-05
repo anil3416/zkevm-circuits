@@ -65,9 +65,10 @@ impl<F: Field> ExecutionGadget<F> for BitwiseGadget<F> {
             rw_counter: Delta(3.expr()),
             program_counter: Delta(1.expr()),
             stack_pointer: Delta(1.expr()),
+            gas_left: Delta(-OpcodeId::AND.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -102,11 +103,10 @@ impl<F: Field> ExecutionGadget<F> for BitwiseGadget<F> {
 mod test {
     use crate::{
         evm_circuit::test::rand_word,
-        test_util::{
-            get_fixed_table, test_circuits_using_bytecode, BytecodeTestConfig, FixedTableConfig,
-        },
+        test_util::{get_fixed_table, run_test_circuits, BytecodeTestConfig, FixedTableConfig},
     };
     use eth_types::{bytecode, Word};
+    use mock::TestContext;
 
     fn test_ok(a: Word, b: Word) {
         let bytecode = bytecode! {
@@ -116,7 +116,6 @@ mod test {
             PUSH32(a)
             PUSH32(b)
             PUSH32(a)
-            #[start]
             AND
             POP
             OR
@@ -128,7 +127,14 @@ mod test {
             evm_circuit_lookup_tags: get_fixed_table(FixedTableConfig::Complete),
             ..Default::default()
         };
-        assert_eq!(test_circuits_using_bytecode(bytecode, test_config), Ok(()));
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                Some(test_config)
+            ),
+            Ok(())
+        );
     }
 
     #[test]

@@ -69,9 +69,10 @@ impl<F: Field> ExecutionGadget<F> for JumpiGadget<F> {
             rw_counter: Delta(2.expr()),
             program_counter: To(next_program_counter),
             stack_pointer: Delta(2.expr()),
+            gas_left: Delta(-OpcodeId::JUMPI.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -119,6 +120,7 @@ mod test {
         test_util::run_test_circuits,
     };
     use eth_types::{bytecode, Word};
+    use mock::TestContext;
 
     fn test_ok(destination: usize, condition: Word) {
         assert!((68..(1 << 24) - 1).contains(&destination));
@@ -126,7 +128,6 @@ mod test {
         let mut bytecode = bytecode! {
             PUSH32(condition)
             PUSH32(destination)
-            #[start]
             JUMPI
             STOP
         };
@@ -137,7 +138,14 @@ mod test {
             JUMPDEST
             STOP
         });
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 
     #[test]

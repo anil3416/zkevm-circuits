@@ -15,12 +15,13 @@ use halo2_proofs::{
     plonk::{Column, ConstraintSystem, Error, Expression, Fixed, Selector},
     poly::Rotation,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, iter};
 
 mod add;
 mod begin_tx;
 mod bitwise;
 mod byte;
+mod call;
 mod calldatacopy;
 mod calldataload;
 mod calldatasize;
@@ -29,8 +30,13 @@ mod callvalue;
 mod coinbase;
 mod comparator;
 mod dup;
-mod error_oog_pure_memory;
+mod end_block;
+mod end_tx;
+mod error_oog_static_memory;
+mod extcodehash;
 mod gas;
+mod gasprice;
+mod is_zero;
 mod jump;
 mod jumpdest;
 mod jumpi;
@@ -39,6 +45,7 @@ mod memory_copy;
 mod msize;
 mod mul;
 mod number;
+mod origin;
 mod pc;
 mod pop;
 mod push;
@@ -46,6 +53,7 @@ mod selfbalance;
 mod signed_comparator;
 mod signextend;
 mod sload;
+mod sstore;
 mod stop;
 mod swap;
 mod timestamp;
@@ -54,6 +62,7 @@ use add::AddGadget;
 use begin_tx::BeginTxGadget;
 use bitwise::BitwiseGadget;
 use byte::ByteGadget;
+use call::CallGadget;
 use calldatacopy::CallDataCopyGadget;
 use calldataload::CallDataLoadGadget;
 use calldatasize::CallDataSizeGadget;
@@ -62,8 +71,13 @@ use callvalue::CallValueGadget;
 use coinbase::CoinbaseGadget;
 use comparator::ComparatorGadget;
 use dup::DupGadget;
-use error_oog_pure_memory::ErrorOOGPureMemoryGadget;
+use end_block::EndBlockGadget;
+use end_tx::EndTxGadget;
+use error_oog_static_memory::ErrorOOGStaticMemoryGadget;
+use extcodehash::ExtcodehashGadget;
 use gas::GasGadget;
+use gasprice::GasPriceGadget;
+use is_zero::IsZeroGadget;
 use jump::JumpGadget;
 use jumpdest::JumpdestGadget;
 use jumpi::JumpiGadget;
@@ -72,6 +86,7 @@ use memory_copy::CopyToMemoryGadget;
 use msize::MsizeGadget;
 use mul::MulGadget;
 use number::NumberGadget;
+use origin::OriginGadget;
 use pc::PcGadget;
 use pop::PopGadget;
 use push::PushGadget;
@@ -79,6 +94,7 @@ use selfbalance::SelfbalanceGadget;
 use signed_comparator::SignedComparatorGadget;
 use signextend::SignextendGadget;
 use sload::SloadGadget;
+use sstore::SstoreGadget;
 use stop::StopGadget;
 use swap::SwapGadget;
 use timestamp::TimestampGadget;
@@ -105,6 +121,7 @@ pub(crate) trait ExecutionGadget<F: FieldExt> {
 pub(crate) struct ExecutionConfig<F> {
     q_step: Selector,
     q_step_first: Selector,
+    q_step_last: Selector,
     step: Step<F>,
     presets_map: HashMap<ExecutionState, Vec<Preset<F>>>,
     add_gadget: AddGadget<F>,
@@ -115,14 +132,19 @@ pub(crate) struct ExecutionConfig<F> {
     calldatacopy_gadget: CallDataCopyGadget<F>,
     calldataload_gadget: CallDataLoadGadget<F>,
     calldatasize_gadget: CallDataSizeGadget<F>,
+    origin_gadget: OriginGadget<F>,
     caller_gadget: CallerGadget<F>,
     call_value_gadget: CallValueGadget<F>,
+    call_gadget: CallGadget<F>,
     comparator_gadget: ComparatorGadget<F>,
     dup_gadget: DupGadget<F>,
-    error_oog_pure_memory_gadget: ErrorOOGPureMemoryGadget<F>,
+    end_block_gadget: EndBlockGadget<F>,
+    end_tx_gadget: EndTxGadget<F>,
+    error_oog_static_memory_gadget: ErrorOOGStaticMemoryGadget<F>,
     jump_gadget: JumpGadget<F>,
     jumpdest_gadget: JumpdestGadget<F>,
     jumpi_gadget: JumpiGadget<F>,
+    gasprice_gadget: GasPriceGadget<F>,
     gas_gadget: GasGadget<F>,
     memory_gadget: MemoryGadget<F>,
     copy_to_memory_gadget: CopyToMemoryGadget<F>,
@@ -139,6 +161,9 @@ pub(crate) struct ExecutionConfig<F> {
     selfbalance_gadget: SelfbalanceGadget<F>,
     number_gadget: NumberGadget<F>,
     sload_gadget: SloadGadget<F>,
+    sstore_gadget: SstoreGadget<F>,
+    extcodehash_gadget: ExtcodehashGadget<F>,
+    iszero_gadget: IsZeroGadget<F>,
 }
 
 impl<F: Field> ExecutionConfig<F> {
@@ -159,6 +184,7 @@ impl<F: Field> ExecutionConfig<F> {
     {
         let q_step = meta.complex_selector();
         let q_step_first = meta.complex_selector();
+        let q_step_last = meta.complex_selector();
         let qs_byte_lookup = meta.advice_column();
         let advices = [(); STEP_WIDTH].map(|_| meta.advice_column());
 
@@ -170,6 +196,7 @@ impl<F: Field> ExecutionConfig<F> {
         meta.create_gate("Constrain execution state", |meta| {
             let q_step = meta.query_selector(q_step);
             let q_step_first = meta.query_selector(q_step_first);
+            let q_step_last = meta.query_selector(q_step_last);
 
             // Only one of execution_state should be enabled
             let sum_to_one = (
@@ -189,21 +216,93 @@ impl<F: Field> ExecutionConfig<F> {
                 )
             });
 
-            // TODO: ExecutionState transition needs to be constraint to avoid
-            // transition from non-terminator to BeginTx.
+            // ExecutionState transition should be correct.
+            let execution_state_transition = {
+                let q_step_last = q_step_last.clone();
+                iter::empty()
+                    .chain(
+                        [
+                            (
+                                "EndTx can only transit to BeginTx or EndBlock",
+                                ExecutionState::EndTx,
+                                vec![ExecutionState::BeginTx, ExecutionState::EndBlock],
+                            ),
+                            (
+                                "EndBlock can only transit to EndBlock",
+                                ExecutionState::EndBlock,
+                                vec![ExecutionState::EndBlock],
+                            ),
+                        ]
+                        .map(|(name, from, to)| {
+                            (
+                                name,
+                                step_curr.execution_state_selector([from])
+                                    * (1.expr() - step_next.execution_state_selector(to)),
+                            )
+                        }),
+                    )
+                    .chain(
+                        [
+                            (
+                                "Only EndTx can transit to BeginTx",
+                                ExecutionState::BeginTx,
+                                vec![ExecutionState::EndTx],
+                            ),
+                            (
+                                "Only ExecutionState which halts or BeginTx can transit to EndTx",
+                                ExecutionState::EndTx,
+                                ExecutionState::iterator()
+                                    .filter(ExecutionState::halts)
+                                    .chain(iter::once(ExecutionState::BeginTx))
+                                    .collect(),
+                            ),
+                            (
+                                "Only EndTx or EndBlock can transit to EndBlock",
+                                ExecutionState::EndBlock,
+                                vec![ExecutionState::EndTx, ExecutionState::EndBlock],
+                            ),
+                            (
+                                "Only ExecutionState which copies memory to memory can transit to CopyToMemory",
+                                ExecutionState::CopyToMemory,
+                                vec![ExecutionState::CopyToMemory, ExecutionState::CALLDATACOPY],
+                            ),
+                        ]
+                        .map(|(name, to, from)| {
+                            (
+                                name,
+                                step_next.execution_state_selector([to])
+                                    * (1.expr() - step_curr.execution_state_selector(from)),
+                            )
+                        }),
+                    )
+                    .map(move |(name, poly)| (name, (1.expr() - q_step_last.clone()) * poly))
+            };
 
-            let first_step_check = {
-                let begin_tx_selector = step_curr.execution_state_selector(ExecutionState::BeginTx);
-                std::iter::once((
+            let _first_step_check = {
+                let begin_tx_selector =
+                    step_curr.execution_state_selector([ExecutionState::BeginTx]);
+                iter::once((
                     "First step should be BeginTx",
-                    q_step_first * (begin_tx_selector - 1u64.expr()),
+                    q_step_first * (1.expr() - begin_tx_selector),
                 ))
             };
 
-            std::iter::once(sum_to_one)
+            let _last_step_check = {
+                let end_block_selector =
+                    step_curr.execution_state_selector([ExecutionState::EndBlock]);
+                iter::once((
+                    "Last step should be EndBlock",
+                    q_step_last * (1.expr() - end_block_selector),
+                ))
+            };
+
+            iter::once(sum_to_one)
                 .chain(bool_checks)
+                .chain(execution_state_transition)
                 .map(move |(name, poly)| (name, q_step.clone() * poly))
-                .chain(first_step_check)
+                // TODO: Enable these after test of CALLDATACOPY is complete.
+                // .chain(first_step_check)
+                // .chain(last_step_check)
         });
 
         // Use qs_byte_lookup as selector to do byte range lookup on each advice
@@ -244,6 +343,7 @@ impl<F: Field> ExecutionConfig<F> {
         let config = Self {
             q_step,
             q_step_first,
+            q_step_last,
             add_gadget: configure_gadget!(),
             mul_gadget: configure_gadget!(),
             bitwise_gadget: configure_gadget!(),
@@ -252,15 +352,20 @@ impl<F: Field> ExecutionConfig<F> {
             calldatacopy_gadget: configure_gadget!(),
             calldataload_gadget: configure_gadget!(),
             calldatasize_gadget: configure_gadget!(),
+            origin_gadget: configure_gadget!(),
             caller_gadget: configure_gadget!(),
             call_value_gadget: configure_gadget!(),
+            call_gadget: configure_gadget!(),
             comparator_gadget: configure_gadget!(),
             dup_gadget: configure_gadget!(),
-            error_oog_pure_memory_gadget: configure_gadget!(),
+            end_block_gadget: configure_gadget!(),
+            end_tx_gadget: configure_gadget!(),
+            error_oog_static_memory_gadget: configure_gadget!(),
             jump_gadget: configure_gadget!(),
             jumpdest_gadget: configure_gadget!(),
             jumpi_gadget: configure_gadget!(),
             gas_gadget: configure_gadget!(),
+            gasprice_gadget: configure_gadget!(),
             memory_gadget: configure_gadget!(),
             copy_to_memory_gadget: configure_gadget!(),
             pc_gadget: configure_gadget!(),
@@ -276,6 +381,9 @@ impl<F: Field> ExecutionConfig<F> {
             timestamp_gadget: configure_gadget!(),
             number_gadget: configure_gadget!(),
             sload_gadget: configure_gadget!(),
+            sstore_gadget: configure_gadget!(),
+            extcodehash_gadget: configure_gadget!(),
+            iszero_gadget: configure_gadget!(),
             step: step_curr,
             presets_map,
         };
@@ -316,9 +424,10 @@ impl<F: Field> ExecutionConfig<F> {
 
         let (constraints, constraints_first_step, lookups, presets) = cb.build();
         debug_assert!(
-            presets_map.insert(G::EXECUTION_STATE, presets).is_none(),
+            !presets_map.contains_key(&G::EXECUTION_STATE),
             "execution state already configured"
         );
+        presets_map.insert(G::EXECUTION_STATE, presets);
 
         for (selector, constraints) in [
             (q_step, constraints),
@@ -405,7 +514,7 @@ impl<F: Field> ExecutionConfig<F> {
             };
         }
 
-        lookup!(Table::Fixed, fixed_table, "fixed table");
+        lookup!(Table::Fixed, fixed_table, "Fixed table");
         lookup!(Table::Tx, tx_table, "Tx table");
         lookup!(Table::Rw, rw_table, "RW table");
         lookup!(Table::Bytecode, bytecode_table, "Bytecode table");
@@ -421,15 +530,14 @@ impl<F: Field> ExecutionConfig<F> {
             || "Execution step",
             |mut region| {
                 let mut offset = 0;
+
+                self.q_step_first.enable(&mut region, offset)?;
+
                 for transaction in &block.txs {
                     for step in &transaction.steps {
                         let call = &transaction.calls[step.call_index];
 
                         self.q_step.enable(&mut region, offset)?;
-                        if offset == 0 {
-                            self.q_step_first.enable(&mut region, offset)?;
-                        }
-
                         self.assign_exec_step(&mut region, offset, block, transaction, call, step)?;
 
                         offset += STEP_HEIGHT;
@@ -440,6 +548,7 @@ impl<F: Field> ExecutionConfig<F> {
         )?;
 
         // TODO: Pad leftover region to the desired capacity
+        // TODO: Enable q_step_last
 
         Ok(())
     }
@@ -454,6 +563,9 @@ impl<F: Field> ExecutionConfig<F> {
             || "Execution step",
             |mut region| {
                 let mut offset = 0;
+
+                self.q_step_first.enable(&mut region, offset)?;
+
                 for transaction in &block.txs {
                     for step in &transaction.steps {
                         let call = &transaction.calls[step.call_index];
@@ -464,6 +576,9 @@ impl<F: Field> ExecutionConfig<F> {
                         offset += STEP_HEIGHT;
                     }
                 }
+
+                self.q_step_last.enable(&mut region, offset - STEP_HEIGHT)?;
+
                 Ok(())
             },
         )
@@ -497,6 +612,10 @@ impl<F: Field> ExecutionConfig<F> {
 
         match step.execution_state {
             ExecutionState::BeginTx => assign_exec_step!(self.begin_tx_gadget),
+            ExecutionState::EndTx => assign_exec_step!(self.end_tx_gadget),
+            ExecutionState::EndBlock => {
+                assign_exec_step!(self.end_block_gadget)
+            }
             ExecutionState::STOP => assign_exec_step!(self.stop_gadget),
             ExecutionState::ADD => assign_exec_step!(self.add_gadget),
             ExecutionState::MUL => assign_exec_step!(self.mul_gadget),
@@ -519,9 +638,11 @@ impl<F: Field> ExecutionConfig<F> {
                 assign_exec_step!(self.jumpdest_gadget)
             }
             ExecutionState::GAS => assign_exec_step!(self.gas_gadget),
+            ExecutionState::GASPRICE => assign_exec_step!(self.gasprice_gadget),
             ExecutionState::PUSH => assign_exec_step!(self.push_gadget),
             ExecutionState::DUP => assign_exec_step!(self.dup_gadget),
             ExecutionState::SWAP => assign_exec_step!(self.swap_gadget),
+            ExecutionState::ORIGIN => assign_exec_step!(self.origin_gadget),
             ExecutionState::CALLER => assign_exec_step!(self.caller_gadget),
             ExecutionState::CALLVALUE => {
                 assign_exec_step!(self.call_value_gadget)
@@ -535,8 +656,12 @@ impl<F: Field> ExecutionConfig<F> {
             }
             ExecutionState::SELFBALANCE => assign_exec_step!(self.selfbalance_gadget),
             ExecutionState::SLOAD => assign_exec_step!(self.sload_gadget),
+            ExecutionState::SSTORE => assign_exec_step!(self.sstore_gadget),
             ExecutionState::CALLDATACOPY => {
                 assign_exec_step!(self.calldatacopy_gadget)
+            }
+            ExecutionState::EXTCODEHASH => {
+                assign_exec_step!(self.extcodehash_gadget)
             }
             ExecutionState::CopyToMemory => {
                 assign_exec_step!(self.copy_to_memory_gadget)
@@ -544,11 +669,15 @@ impl<F: Field> ExecutionConfig<F> {
             ExecutionState::CALLDATALOAD => {
                 assign_exec_step!(self.calldataload_gadget)
             }
-            ExecutionState::ErrorOutOfGasPureMemory => {
-                assign_exec_step!(self.error_oog_pure_memory_gadget)
+            ExecutionState::ErrorOutOfGasStaticMemoryExpansion => {
+                assign_exec_step!(self.error_oog_static_memory_gadget)
             }
             ExecutionState::CALLDATASIZE => {
                 assign_exec_step!(self.calldatasize_gadget)
+            }
+            ExecutionState::ISZERO => assign_exec_step!(self.iszero_gadget),
+            ExecutionState::CALL => {
+                assign_exec_step!(self.call_gadget)
             }
             _ => unimplemented!(),
         }

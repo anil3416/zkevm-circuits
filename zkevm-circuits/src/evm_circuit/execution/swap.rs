@@ -47,9 +47,10 @@ impl<F: Field> ExecutionGadget<F> for SwapGadget<F> {
         let step_state_transition = StepStateTransition {
             rw_counter: Delta(4.expr()),
             program_counter: Delta(1.expr()),
+            gas_left: Delta(-OpcodeId::SWAP1.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -92,6 +93,7 @@ mod test {
     use crate::{evm_circuit::test::rand_word, test_util::run_test_circuits};
     use eth_types::evm_types::OpcodeId;
     use eth_types::{bytecode, Word};
+    use mock::TestContext;
 
     fn test_ok(opcode: OpcodeId, lhs: Word, rhs: Word) {
         let n = (opcode.as_u8() - OpcodeId::SWAP1.as_u8() + 1) as usize;
@@ -104,11 +106,17 @@ mod test {
         }
         bytecode.append(&bytecode! {
             PUSH32(rhs)
-            #[start]
             .write_op(opcode)
             STOP
         });
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 
     #[test]

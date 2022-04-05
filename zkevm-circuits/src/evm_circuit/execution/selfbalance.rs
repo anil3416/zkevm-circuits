@@ -12,6 +12,7 @@ use crate::{
     },
     util::Expr,
 };
+use bus_mapping::evm::OpcodeId;
 use eth_types::{Field, ToLittleEndian, ToScalar};
 use halo2_proofs::{circuit::Region, plonk::Error};
 
@@ -44,9 +45,10 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
             rw_counter: Delta(3.expr()),
             program_counter: Delta(1.expr()),
             stack_pointer: Delta((-1).expr()),
+            gas_left: Delta(-OpcodeId::SELFBALANCE.constant_gas_cost().expr()),
             ..Default::default()
         };
-        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition, None);
+        let same_context = SameContextGadget::construct(cb, opcode, step_state_transition);
 
         Self {
             same_context,
@@ -87,14 +89,21 @@ impl<F: Field> ExecutionGadget<F> for SelfbalanceGadget<F> {
 mod test {
     use crate::test_util::run_test_circuits;
     use eth_types::bytecode;
+    use mock::TestContext;
 
     #[test]
     fn selfbalance_gadget_test() {
         let bytecode = bytecode! {
-            #[start]
             SELFBALANCE
             STOP
         };
-        assert_eq!(run_test_circuits(bytecode), Ok(()));
+
+        assert_eq!(
+            run_test_circuits(
+                TestContext::<2, 1>::simple_ctx_with_bytecode(bytecode).unwrap(),
+                None
+            ),
+            Ok(())
+        );
     }
 }
