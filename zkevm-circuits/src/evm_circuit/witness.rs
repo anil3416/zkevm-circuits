@@ -639,20 +639,6 @@ impl Rw {
         }
     }
 
-    pub fn rw_counter(&self) -> usize {
-        match self {
-            Self::Memory { rw_counter, .. }
-            | Self::Stack { rw_counter, .. }
-            | Self::AccountStorage { rw_counter, .. }
-            | Self::TxAccessListAccount { rw_counter, .. }
-            | Self::TxAccessListAccountStorage { rw_counter, .. }
-            | Self::TxRefund { rw_counter, .. }
-            | Self::Account { rw_counter, .. }
-            | Self::AccountDestructed { rw_counter, .. }
-            | Self::CallContext { rw_counter, .. } => *rw_counter,
-        }
-    }
-
     pub fn is_write(&self) -> bool {
         match self {
             Self::Memory { is_write, .. }

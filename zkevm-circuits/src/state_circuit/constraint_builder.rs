@@ -133,10 +133,12 @@ impl<F: Field> ConstraintBuilder<F> {
             "stack address fits into 10 bits",
             (q.address.value.clone(), q.lookups.u10.clone()),
         );
+        /*
         self.require_zero(
             "if call_id doesn't change, stack address change is 0 or 1",
             q.id_change() * q.address_change(),
         )
+        */
     }
 
     fn build_account_storage_constraints(&mut self, q: &Queries<F>) {

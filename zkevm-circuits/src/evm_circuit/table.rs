@@ -202,6 +202,7 @@ pub enum BytecodeFieldTag {
     Padding,
 }
 
+#[derive(Clone, Copy, Debug, EnumIter)]
 pub enum CallContextFieldTag {
     RwCounterEndOfReversion = 1,
     CallerId,

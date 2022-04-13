@@ -156,6 +156,7 @@ impl<F: Field> Circuit<F> for StateCircuit<F> {
             || "assign rw table",
             |mut region| {
                 for (offset, row) in rows.iter().enumerate() {
+                    log::trace!("assign {} {:?}", offset, row);
                     if offset != 0 {
                         // just treat selector as is_start?
                         region.assign_fixed(

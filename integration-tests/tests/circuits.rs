@@ -51,15 +51,8 @@ async fn test_state_circuit_block(block_num: u64) {
     trace!("storage_ops: {:#?}", storage_ops);
 
     const DEGREE: usize = 17;
-    const RW_COUNTER_MAX: usize = 1 << (DEGREE - 1);
-    const ROWS_MAX: usize = 1 << (DEGREE - 1);
 
-    let rw_map = RwMap::from(&OperationContainer {
-        memory: memory_ops,
-        stack: stack_ops,
-        //storage: storage_ops,
-        ..Default::default()
-    });
+    let rw_map = RwMap::from(&builder.block.container);
 
     let randomness = Fr::rand();
     let circuit = StateCircuit::<Fr>::new(randomness, rw_map);
