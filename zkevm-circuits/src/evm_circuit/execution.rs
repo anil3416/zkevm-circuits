@@ -13,6 +13,7 @@ use crate::{
     util::Expr,
 };
 use eth_types::Field;
+use ff::Field;
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{Layouter, Region},
@@ -898,23 +899,33 @@ impl<F: Field> ExecutionConfig<F> {
             if let Some(v) = assigned.value() {
                 let name = stored_expression.name.clone();
                 if name.starts_with("rw lookup ") && !name.contains(" with reversion") {
-                    assigned_rw_values.push((name, *v));
+                    if !v.is_zero_vartime() {
+                        assigned_rw_values.push((name, *v));
+                    }
                 }
             }
         }
-
-        if !assigned_rw_values.is_empty() {
-            for idx in 0..step.rw_indices.len() {
-                let rw_idx = step.rw_indices[idx];
-                let rw = &block.rws[rw_idx];
-                let rw_row = rw.table_assignment(block.randomness);
-                let rlc = rw_row.rlc(block.randomness);
-                debug_assert_eq!(
-                    rlc, assigned_rw_values[idx].1,
-                    "incorrect rw witness {} at {:?}({}th rw), opcode: {:?}",
-                    assigned_rw_values[idx].0, rw_idx, idx, step.execution_state
+        let rw_table_values: Vec<_> = step
+            .rw_indices
+            .iter()
+            .map(|rw_idx| {
+                (
+                    rw_idx,
+                    block.rws[*rw_idx]
+                        .table_assignment(block.randomness)
+                        .rlc(block.randomness),
                 )
-            }
+            })
+            .filter(|(rw_idx, v)| !v.is_zero_vartime())
+            .collect();
+
+        for idx in 0..assigned_rw_values.len() {
+            let (rw_idx, rlc) = rw_table_values[idx];
+            debug_assert_eq!(
+                rlc, assigned_rw_values[idx].1,
+                "incorrect rw witness {} at {:?}({}th rw), step: {:#?}",
+                assigned_rw_values[idx].0, rw_idx, idx, step
+            )
         }
 
         Ok(())
