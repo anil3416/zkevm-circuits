@@ -200,14 +200,15 @@ fn fn_gen_associated_ops(opcode_id: &OpcodeId) -> FnGenAssociatedOps {
         OpcodeId::RETURN => Stop::gen_associated_ops,
         // OpcodeId::DELEGATECALL => {},
         // OpcodeId::CREATE2 => {},
-        // OpcodeId::STATICCALL => {},
+        // FIXME later
+        OpcodeId::STATICCALL => Call::gen_associated_ops,
         // TODO: Handle REVERT by its own gen_associated_ops.
         OpcodeId::REVERT => Stop::gen_associated_ops,
         OpcodeId::SELFDESTRUCT => {
             warn!("Using dummy gen_selfdestruct_ops for opcode SELFDESTRUCT");
             dummy_gen_selfdestruct_ops
         }
-        OpcodeId::CALLCODE | OpcodeId::DELEGATECALL | OpcodeId::STATICCALL => {
+        OpcodeId::CALLCODE | OpcodeId::DELEGATECALL => {
             warn!("Using dummy gen_call_ops for opcode {:?}", opcode_id);
             dummy_gen_call_ops
         }

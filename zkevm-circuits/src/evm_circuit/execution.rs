@@ -887,12 +887,34 @@ impl<F: Field> ExecutionConfig<F> {
         }
 
         // Fill in the witness values for stored expressions
+
+        let mut assigned_rw_values = Vec::new();
         for stored_expression in self
             .stored_expressions_map
             .get(&step.execution_state)
             .unwrap_or_else(|| panic!("Execution state unknown: {:?}", step.execution_state))
         {
-            stored_expression.assign(region, offset)?;
+            let assigned = stored_expression.assign(region, offset)?;
+            if let Some(v) = assigned.value() {
+                let name = stored_expression.name.clone();
+                if name.starts_with("rw lookup ") && !name.contains(" with reversion") {
+                    assigned_rw_values.push((name, *v));
+                }
+            }
+        }
+
+        if !assigned_rw_values.is_empty() {
+            for idx in 0..step.rw_indices.len() {
+                let rw_idx = step.rw_indices[idx];
+                let rw = &block.rws[rw_idx];
+                let rw_row = rw.table_assignment(block.randomness);
+                let rlc = rw_row.rlc(block.randomness);
+                debug_assert_eq!(
+                    rlc, assigned_rw_values[idx].1,
+                    "incorrect rw witness {} at {:?}({}th rw), opcode: {:?}",
+                    assigned_rw_values[idx].0, rw_idx, idx, step.execution_state
+                )
+            }
         }
 
         Ok(())

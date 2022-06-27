@@ -12,6 +12,7 @@ use crate::{
         util::{
             common_gadget::SameContextGadget,
             constraint_builder::{ConstraintBuilder, StepStateTransition, Transition::Delta},
+            from_bytes,
             memory_gadget::BufferReaderGadget,
             CachedRegion, Cell, MemoryAddress, RandomLinearCombination,
         },
@@ -64,7 +65,7 @@ impl<F: Field> ExecutionGadget<F> for CallDataLoadGadget<F> {
         let call_data_length = cb.query_cell();
         let call_data_offset = cb.query_cell();
 
-        let src_addr = offset.expr() + call_data_offset.expr();
+        let src_addr = from_bytes::expr(&offset.cells) + call_data_offset.expr();
         let src_addr_end = call_data_length.expr() + call_data_offset.expr();
 
         cb.condition(cb.curr.state.is_root.expr(), |cb| {
