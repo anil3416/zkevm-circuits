@@ -13,7 +13,6 @@ use crate::{
     util::Expr,
 };
 use eth_types::Field;
-use ff::Field;
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{Layouter, Region},
@@ -916,7 +915,7 @@ impl<F: Field> ExecutionConfig<F> {
                         .rlc(block.randomness),
                 )
             })
-            .filter(|(rw_idx, v)| !v.is_zero_vartime())
+            .filter(|(_, v)| !v.is_zero_vartime())
             .collect();
 
         for idx in 0..assigned_rw_values.len() {
