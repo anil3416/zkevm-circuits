@@ -70,11 +70,11 @@ impl<F: Field> ExecutionGadget<F> for CallGadget<F> {
 
         // We do the responsible opcode check explicitly here because we're not using
         // the `SameContextGadget` for `CALL`.
-        cb.require_equal(
-            "Opcode should be CALL",
-            opcode.expr(),
-            OpcodeId::CALL.expr(),
-        );
+        //cb.require_equal(
+        //    "Opcode should be CALL",
+        //    opcode.expr(),
+        //    OpcodeId::CALL.expr(),
+        //);
 
         let gas_word = cb.query_word();
         let callee_address_word = cb.query_word();

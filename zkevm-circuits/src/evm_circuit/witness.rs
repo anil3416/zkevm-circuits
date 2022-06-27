@@ -1212,6 +1212,7 @@ impl From<&circuit_input_builder::ExecStep> for ExecutionState {
                     OpcodeId::CHAINID => ExecutionState::CHAINID,
                     OpcodeId::ISZERO => ExecutionState::ISZERO,
                     OpcodeId::CALL => ExecutionState::CALL,
+                    OpcodeId::STATICCALL => ExecutionState::CALL,
                     OpcodeId::ORIGIN => ExecutionState::ORIGIN,
                     OpcodeId::CODECOPY => ExecutionState::CODECOPY,
                     OpcodeId::CALLDATALOAD => ExecutionState::CALLDATALOAD,
