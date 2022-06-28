@@ -1212,10 +1212,10 @@ impl From<&circuit_input_builder::ExecStep> for ExecutionState {
                     OpcodeId::CHAINID => ExecutionState::CHAINID,
                     OpcodeId::ISZERO => ExecutionState::ISZERO,
                     OpcodeId::CALL => ExecutionState::CALL,
-                    OpcodeId::STATICCALL => ExecutionState::CALL,
                     OpcodeId::ORIGIN => ExecutionState::ORIGIN,
                     OpcodeId::CODECOPY => ExecutionState::CODECOPY,
                     OpcodeId::CALLDATALOAD => ExecutionState::CALLDATALOAD,
+                    OpcodeId::INVALID(_) => ExecutionState::ErrorInvalidOpcode,
                     _ => {
                         log::warn!("unimplemented opcode {:?}", op);
                         ExecutionState::DUMMY

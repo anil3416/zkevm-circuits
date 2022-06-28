@@ -223,7 +223,7 @@ impl<F: Field> ExecutionGadget<F> for CallDataLoadGadget<F> {
                 }
             } else {
                 // fetch from memory
-                if src_addr + i < call.call_data_length as usize {
+                if src_addr + i < (call.call_data_offset + call.call_data_length) as usize {
                     *byte = block.rws[step.rw_indices[OFFSET_RW_MEMORY_INDICES + i]].memory_value();
                 }
             }
