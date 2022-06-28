@@ -60,10 +60,12 @@ impl TransactionContext {
                 }
             }
 
+
             std::iter::once(!geth_trace.failed)
                 .chain(call_is_success_map.into_values())
                 .collect()
         };
+        println!("call_is_success {:?}", call_is_success);
 
         let mut tx_ctx = Self {
             id: eth_tx

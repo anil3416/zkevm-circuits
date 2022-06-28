@@ -140,6 +140,7 @@ impl<'a> CircuitInputBuilder {
     ) -> Result<(), Error> {
         // accumulates gas across all txs in the block
         let mut cumulative_gas_used = HashMap::new();
+        println!("total tx num {}", eth_block.transactions.len());
         for (tx_index, tx) in eth_block.transactions.iter().enumerate() {
             let geth_trace = &geth_traces[tx_index];
             if geth_trace.struct_logs.is_empty() {
@@ -150,7 +151,7 @@ impl<'a> CircuitInputBuilder {
                 log::warn!("Creation transaction is left unimplemented");
                 continue;
             }
-            self.handle_tx(
+            self.handle_tx(tx_index,
                 tx,
                 geth_trace,
                 tx_index + 1 == eth_block.transactions.len(),
@@ -168,6 +169,7 @@ impl<'a> CircuitInputBuilder {
     /// generated operations.
     fn handle_tx(
         &mut self,
+        tx_index: usize,
         eth_tx: &eth_types::Transaction,
         geth_trace: &GethExecTrace,
         is_last_tx: bool,
@@ -195,7 +197,7 @@ impl<'a> CircuitInputBuilder {
 
         for (index, geth_step) in geth_trace.struct_logs.iter().enumerate() {
             let mut state_ref = self.state_ref(&mut tx, &mut tx_ctx);
-            log::trace!("handle {}th opcode {:?} ", index, geth_step.op);
+            log::trace!("handle {}th tx {}th opcode {:?} ", tx_index, index, geth_step.op);
             let exec_steps = gen_associated_ops(
                 &geth_step.op,
                 &mut state_ref,

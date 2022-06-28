@@ -605,6 +605,7 @@ impl<'a> CircuitInputStateRef<'a> {
 
     /// Handle a reversion group
     fn handle_reversion(&mut self) {
+        println!("handle_reversion");
         let reversion_group = self
             .tx_ctx
             .reversion_groups
@@ -615,6 +616,7 @@ impl<'a> CircuitInputStateRef<'a> {
         for (step_index, op_ref) in reversion_group.op_refs.iter().rev().copied() {
             if let Some(op) = self.get_rev_op_by_ref(&op_ref) {
                 self.apply_op(&op);
+                println!("add rev {:?} to {:?}", op, self.tx.steps_mut()[step_index]);
                 let rev_op_ref = self.block.container.insert_op_enum(
                     self.block_ctx.rwc.inc_pre(),
                     RW::WRITE,
@@ -656,6 +658,7 @@ impl<'a> CircuitInputStateRef<'a> {
         }
 
         // Handle reversion if this call doens't end successfully
+        println!("handle return is_success {} is_persistent {}", self.call()?.is_success, self.call()?.is_persistent);
         if !self.call()?.is_success {
             self.handle_reversion();
         }
