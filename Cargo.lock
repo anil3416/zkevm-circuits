@@ -2072,6 +2072,7 @@ dependencies = [
  "ethers",
  "ff 0.11.1",
  "halo2_proofs",
+ "hex",
  "lazy_static",
  "log",
  "pretty_assertions",

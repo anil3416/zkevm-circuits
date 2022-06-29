@@ -894,12 +894,17 @@ impl Rw {
                     _ => value.to_scalar().unwrap(),
                 }
             }
-            Self::Account { value, .. }
-            | Self::AccountStorage { value, .. }
-            | Self::Stack { value, .. } => {
+            Self::AccountStorage { value, .. } | Self::Stack { value, .. } => {
                 RandomLinearCombination::random_linear_combine(value.to_le_bytes(), randomness)
             }
-
+            Self::Account {
+                value, field_tag, ..
+            } => match field_tag {
+                AccountFieldTag::Nonce => value.to_scalar().unwrap(),
+                _ => {
+                    RandomLinearCombination::random_linear_combine(value.to_le_bytes(), randomness)
+                }
+            },
             Self::TxLog {
                 field_tag, value, ..
             } => match field_tag {
@@ -919,12 +924,23 @@ impl Rw {
 
     fn value_prev_assignment<F: Field>(&self, randomness: F) -> Option<F> {
         match self {
-            Self::Account { value_prev, .. } | Self::AccountStorage { value_prev, .. } => {
+            Self::AccountStorage { value_prev, .. } => {
                 Some(RandomLinearCombination::random_linear_combine(
                     value_prev.to_le_bytes(),
                     randomness,
                 ))
             }
+            Self::Account {
+                value_prev,
+                field_tag,
+                ..
+            } => match field_tag {
+                AccountFieldTag::Nonce => Some(value_prev.to_scalar().unwrap()),
+                _ => Some(RandomLinearCombination::random_linear_combine(
+                    value_prev.to_le_bytes(),
+                    randomness,
+                )),
+            },
             Self::TxAccessListAccount { is_warm_prev, .. }
             | Self::TxAccessListAccountStorage { is_warm_prev, .. } => {
                 Some(F::from(*is_warm_prev as u64))

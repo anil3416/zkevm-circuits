@@ -921,24 +921,21 @@ impl<F: Field> ExecutionConfig<F> {
                 }
             }
         }
-        let rw_table_values: Vec<_> = step
-            .rw_indices
-            .iter()
-            .map(|rw_idx| {
-                let rlc = block.rws[*rw_idx]
-                    .table_assignment(block.randomness)
-                    .rlc(block.randomness, block.randomness);
-                (rw_idx, rlc)
-            })
-            .filter(|(_, v)| !v.is_zero_vartime())
-            .collect();
 
         for idx in 0..assigned_rw_values.len() {
-            let (rw_idx, rlc) = rw_table_values[idx];
+            let rw_idx = step.rw_indices[idx];
+            let rw = block.rws[rw_idx];
+            let table_assignments = rw.table_assignment(block.randomness);
+            let rlc = table_assignments.rlc(block.randomness, block.randomness);
             debug_assert_eq!(
                 rlc, assigned_rw_values[idx].1,
-                "incorrect rw witness {} at {:?}({}th rw), step: {:#?}",
-                assigned_rw_values[idx].0, rw_idx, idx, step
+                "incorrect rw witness. input: value {:?}, name {}. table: value {:?}, table_assignments {:?}, rw {:?}, index {:?}, {}th rw of step {:?}.",
+                assigned_rw_values[idx].1,
+                assigned_rw_values[idx].0,
+                rlc,
+                table_assignments,
+                rw,
+                rw_idx, idx, step
             )
         }
 
