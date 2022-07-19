@@ -250,10 +250,9 @@ impl<F: Field, const N_ROWS: usize> Circuit<F> for StateCircuit<F, N_ROWS> {
                         || Ok(row.value_assignment(self.randomness)),
                     )?;
 
-                    // TODO: Remove special case for initial values for Rw::CallContext and
-                    // Rw::TxReceipt, which can only be determined by the value for the first
-                    // access row.
-                    if !matches!(row.tag(), RwTableTag::CallContext | RwTableTag::TxReceipt) {
+                    // TODO: Remove special case for initial values for Rw::CallContext, which can
+                    // only be determined by the value for the first access row.
+                    if !matches!(row.tag(), RwTableTag::CallContext) {
                         initial_value = self.updates.get(&row).unwrap_or_default().initial();
                     }
 
@@ -266,11 +265,9 @@ impl<F: Field, const N_ROWS: usize> Circuit<F> for StateCircuit<F, N_ROWS> {
                         )?;
 
                         // For first access to a group, we possibly need to update the initial value
-                        // for RwTableTag::CallContext and RwTableTag::TxReceipt rows and update the
-                        // state root.
+                        // for RwTableTag::CallContext rows and update the state root.
                         if is_first_access {
-                            if matches!(row.tag(), RwTableTag::CallContext | RwTableTag::TxReceipt)
-                            {
+                            if matches!(row.tag(), RwTableTag::CallContext) {
                                 initial_value = row.value_assignment(self.randomness);
                             }
 
