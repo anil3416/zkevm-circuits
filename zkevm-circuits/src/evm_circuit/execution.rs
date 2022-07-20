@@ -788,17 +788,6 @@ impl<F: Field> ExecutionConfig<F> {
                         next,
                         power_of_randomness,
                     )?;
-                    if let Some(&(t, _c, _s)) = next {
-                        if t != transaction {
-                            let mut tt = transaction.clone();
-                            tt.call_data.clear();
-                            tt.calls.clear();
-                            tt.steps.clear();
-                            log::info!("DONE offset {} assign last step of tx {:?}", offset, tt);
-                        }
-                    } else {
-                        log::info!("DONE assign last step of block");
-                    }
                     // q_step logic
                     for idx in 0..height {
                         let offset = offset + idx;
@@ -1165,11 +1154,7 @@ impl<F: Field> ExecutionConfig<F> {
         // Fill in the witness values for stored expressions
 
         for idx in 0..assigned_rw_values.len() {
-            let rw_idx = step.rw_indices[idx];
-            let rw = block.rws[rw_idx];
-            let table_assignments = rw.table_assignment(block.randomness);
-            let rlc = table_assignments.rlc(block.randomness, block.randomness);
-            if rlc != assigned_rw_values[idx].1 {
+            let log_ctx = || {
                 log::error!("assigned_rw_values {:?}", assigned_rw_values);
                 for rw_idx in &step.rw_indices {
                     log::error!(
@@ -1192,8 +1177,23 @@ impl<F: Field> ExecutionConfig<F> {
                     tx,
                     block.context.number
                 );
+            };
+            if idx >= step.rw_indices.len() {
+                log_ctx();
+                panic!(
+                    "invalid rw len exp {} witness {}",
+                    assigned_rw_values.len(),
+                    step.rw_indices.len()
+                );
+            }
+            let rw_idx = step.rw_indices[idx];
+            let rw = block.rws[rw_idx];
+            let table_assignments = rw.table_assignment(block.randomness);
+            let rlc = table_assignments.rlc(block.randomness, block.randomness);
+            if rlc != assigned_rw_values[idx].1 {
+                log_ctx();
                 log::error!(
-                    "incorrect rw witness. input: value {:?}, name {}. table: value {:?}, table_assignments {:?}, rw {:?}, index {:?}, {}th rw of step",
+                    "incorrect rw witness. input_value {:?}, name {}. table_value {:?}, table_assignments {:?}, rw {:?}, index {:?}, {}th rw of step",
                     assigned_rw_values[idx].1,
                     assigned_rw_values[idx].0,
                     rlc,

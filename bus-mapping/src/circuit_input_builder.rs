@@ -144,12 +144,21 @@ impl<'a> CircuitInputBuilder {
         for (tx_index, tx) in eth_block.transactions.iter().enumerate() {
             let geth_trace = &geth_traces[tx_index];
             if geth_trace.struct_logs.is_empty() {
+                // only update state
+                self.sdb.increase_nonce(&tx.from);
+                let (_, from_acc) = self.sdb.get_account_mut(&tx.from);
+                from_acc.balance -= tx.value;
+                from_acc.balance -= tx.gas * tx.gas_price.unwrap();
+
+                let (_, to_acc) = self.sdb.get_account_mut(&tx.from);
+                to_acc.balance += tx.value;
+
                 log::warn!("Native transfer transaction is left unimplemented");
                 continue;
             }
             if tx.to.is_none() {
-                log::warn!("Creation transaction is left unimplemented");
-                continue;
+                //log::warn!("Creation transaction is left unimplemented");
+                //continue;
             }
             log::info!(
                 "handling {}th(inner idx: {}) tx {:?}",

@@ -404,7 +404,7 @@ pub fn gen_begin_tx_ops(state: &mut CircuitInputStateRef) -> Result<ExecStep, Er
 
     // Get code_hash of callee
     let (_, callee_account) = state.sdb.get_account(&call.address);
-    let code_hash = callee_account.code_hash;
+    let code_hash = call.code_hash; // callee_account.code_hash;
 
     // There are 4 branches from here.
     match (
@@ -412,17 +412,11 @@ pub fn gen_begin_tx_ops(state: &mut CircuitInputStateRef) -> Result<ExecStep, Er
         state.is_precompiled(&call.address),
         code_hash.to_fixed_bytes() == *EMPTY_HASH,
     ) {
-        // 1. Creation transaction.
-        (true, _, _) => {
-            warn!("Creation transaction is left unimplemented");
-            Ok(exec_step)
-        }
-        // 2. Call to precompiled.
         (_, true, _) => {
             warn!("Call to precompiled is left unimplemented");
             Ok(exec_step)
         }
-        (_, _, is_empty_code_hash) => {
+        (is_create, _, is_empty_code_hash) => {
             state.account_read(
                 &mut exec_step,
                 call.address,
